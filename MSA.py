@@ -21,9 +21,7 @@ class MultiHeadAttention(Model):
         self.model_size = model_size
         self.num_heads = num_heads
         self.head_size = model_size // num_heads
-        self.WQ = Dense(model_size, name="dense_query")
-        self.WK = Dense(model_size, name="dense_key")
-        self.WV = Dense(model_size, name="dense_value")
+        self.WQKV = Dense(3*model_size)
         self.dense = Dense(model_size)
         self.msa_drop = Dropout(attn_drop)
         self.mlp_drop = Dropout(ffn_drop)
@@ -32,13 +30,12 @@ class MultiHeadAttention(Model):
         # query: (batch, maxlen, model_size)
         # key  : (batch, maxlen, model_size)
         # value: (batch, maxlen, model_size)
-        query, key, value = inputs
-        batch_size = tf.shape(query)[0]
+        batch_size = tf.shape(inputs[0])[0]
 
         # shape: (batch, maxlen, model_size)
-        query = self.WQ(query)
-        key = self.WK(key)
-        value = self.WV(value)
+        qkv = self.WQKV(tf.concat(inputs, axis=1))
+        splits = [K.int_shape(i)[1] for i in inputs]
+        query, key, value = tf.split(qkv, splits, axis=1)
 
         def _split_heads(x):
             seq_len = x.shape[1]
@@ -110,8 +107,8 @@ class FeedForwardNetwork(Model):
 if __name__ == '__main__':
 
     # test MSA & FFN layer
-    x = Input((20, 10))
-    x1 = Input((30, 10))
+    x = Input((20, 10))   # query, [N1,D]
+    x1 = Input((30, 10))  # key, [N2,D]
     mask = Input((20,30))  # [N_q, N_k]
     y = MultiHeadAttention(10, 2)(inputs=[x,x1,x1], mask=mask)
     print('joint', y)
@@ -121,4 +118,11 @@ if __name__ == '__main__':
 
     model = Model([x,x1,mask],y)
     # model.summary()
+
+    layer = MultiHeadAttention(10, 2)
+    y = layer([y,y,y])
+    print(layer.weights)
+    for l in layer.layers:
+        print(l.name)
+        print(l.weights)
 

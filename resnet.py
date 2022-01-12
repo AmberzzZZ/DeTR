@@ -49,6 +49,7 @@ def res_block(x, n_filters, strides, se_ratio=0, dilate=1):
     # shortcut
     if strides!=1 or inpt._keras_shape[-1]!=n_filters:
         inpt = Conv_BN(inpt, n_filters, 1, strides=strides, activation=None)
+
     x = add([inpt, x])
     x = ReLU()(x)
     return x
@@ -77,6 +78,6 @@ def SE_block(inpt, ratio=16):     # spatial squeeze and channel excitation
 if __name__ == '__main__':
 
     model = resnet(input_shape=(224,224,3), depth=50)
-    # model.summary()
+    model.summary()
     # model.load_weights("resnet50_weights_tf_dim_ordering_tf_kernels.h5")
 

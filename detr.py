@@ -52,8 +52,8 @@ def detr(input_shape=(512,512,3), pe='sine', n_classes=80,
 
     # head: mlp
     cls_output = Dense(n_classes, name='cls_pred')(x)
-    box = Dense(mlp_dim, activation='relu', name='box_hidden1')(x)
-    box = Dense(mlp_dim, activation='relu', name='box_hidden2')(box)
+    box = Dense(mlp_dim, activation='relu', name='box_hidden_1')(x)
+    box = Dense(mlp_dim, activation='relu', name='box_hidden_2')(box)
     box_output = Dense(4, activation='sigmoid', name='box_pred')(box)
 
     # model
@@ -247,7 +247,8 @@ if __name__ == '__main__':
     model = detr(input_shape=(512,512,3), pe='sine', n_classes=92,
                  depth=50, dilation=[False,False,False],
                  emb_dim=256, enc_layers=6, dec_layers=6, max_boxes=100)
-    model.summary()
+    # model.summary()
+    model.load_weights("weights/detr-r50.h5")
 
 
 
