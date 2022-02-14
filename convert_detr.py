@@ -4,8 +4,14 @@ import numpy as np
 
 
 # torch weights
-# model = torch.load("weights/detr-r50.pth", map_location='cpu')['model']   # OrderedDict
-model = torch.load("weights/detr-r50-dc5.pth", map_location='cpu')['model']   # OrderedDict
+# pretrained_weights = torch.load("weights/detr-r50.pth", map_location='cpu')
+# # resize class head to fit
+# num_class = 3    # fg + bg
+# pretrained_weights["model"]["class_embed.weight"].resize_(num_class+1, 256)
+# pretrained_weights["model"]["class_embed.bias"].resize_(num_class+1)
+# torch.save(pretrained_weights, "detr-r50_%d.pth"%num_class)
+
+model = torch.load("weights/detr-r50.pth", map_location='cpu')['model']   # OrderedDict
 print(len(model.keys()))
 
 # backbone:
@@ -33,6 +39,7 @@ head_weights = {k:v for k,v in model.items() if 'class_' in k or 'bbox_' in k}  
 print(len(head_weights))
 
 print('-------------------------------------run checking----------------------------------------')
+
 # total_params = 0
 # for k,v in back_weights.items():
 #     print(k, v.shape)
@@ -40,7 +47,7 @@ print('-------------------------------------run checking------------------------
 #     for j in list(v.shape):
 #         tmp *= j
 #     total_params += tmp
-# print('total params', total_params)    # r50: 23561152
+# print('total params', total_params)    # r50: 23561152: conv+bn, trainable + non-trainable
 
 
 # total_params = 0
@@ -102,7 +109,7 @@ print('-------------------------------------run converting----------------------
 enc_layers = 6
 dec_layers = 6
 keras_model = detr(input_shape=(512,512,3), pe='sine', n_classes=92,
-                   depth=50, dilation=[False,False,False],
+                   depth=50, dilation=False,
                    emb_dim=256, enc_layers=enc_layers, dec_layers=dec_layers, max_boxes=100)
 # transpose conv: [out,in,k,k] -> [k,k,in,out]
 # bn: [] -> []
@@ -131,21 +138,20 @@ for layer in keras_model.layers:
         if layer_weights:
             torch_weights.append(layer_weights)
 
-        idx = 0
+        idx = 0    # layer index
         offset = [2,-1,1,-2]
-        cnt = 0
         indices = [6,7,8,9, 26,27,28,29, 52,53,54,55, 90,91,92,93]   # r50 conv-id-path
         for sub_l in layer.layers:
             if sub_l.weights:
-                print(layer.name, ': ', sub_l.name, idx, offset[cnt])
+                print(layer.name, ': ', sub_l.name, idx)
                 # print(len(torch_weights[idx]))
                 # print(len(sub_l.weights))
                 if idx not in indices:
                     sub_l.set_weights(torch_weights[idx])
                 else:
-                    # conv1-conv2-bn1-bn2 vs conv2-bn2-conv1-bn1 situation
-                    sub_l.set_weights(torch_weights[idx+offset[cnt]])
-                    cnt = cnt+1 if cnt<3 else 0
+                    # keras:c1b1c2b2[c0c3b0b3] vs torch:c1b1c2b2[c3b3c0b0] issue
+                    offset_idx = indices.index(idx) % 4
+                    sub_l.set_weights(torch_weights[idx+offset[offset_idx]])
                 idx += 1
 
     if layer.name == 'input_proj':   # conv-bias
@@ -172,8 +178,13 @@ for layer in keras_model.layers:
                     sub_l.set_weights(norm_weights[0:2])
                     if norm_weights:
                         norm_weights = norm_weights[2:]
-                elif 'att' in sub_l.name:
-                    sub_l.set_weights(msa_weights)
+                elif 'self_att' in sub_l.name:
+                    # split attn.in_proj.weight & bias
+                    in_proj_weight = msa_weights[0]   # [d,3d]
+                    in_proj_bias = msa_weights[1]   # [3d]
+                    WQ, WK, WV = np.split(in_proj_weight, 3, axis=1)
+                    BQ, BK, BV = np.split(in_proj_bias, 3, axis=0)
+                    sub_l.set_weights([WQ,BQ,WK,BK,WV,BV]+msa_weights[2:])
                 elif 'dense' in sub_l.name:    # weight & bias
                     sub_l.set_weights(ffn_weights[0:2])
                     if ffn_weights:
@@ -196,10 +207,20 @@ for layer in keras_model.layers:
                     sub_l.set_weights(norm_weights[0:2])
                     if norm_weights:
                         norm_weights = norm_weights[2:]
-                elif 'self' in sub_l.name:
-                    sub_l.set_weights(self_weights)
-                elif 'mutual' in sub_l.name:
-                    sub_l.set_weights(mutual_weights)
+                elif 'self_att' in sub_l.name:
+                    # split attn.in_proj.weight & bias
+                    in_proj_weight = self_weights[0]   # [d,3d]
+                    in_proj_bias = self_weights[1]   # [3d]
+                    WQ, WK, WV = np.split(in_proj_weight, 3, axis=1)
+                    BQ, BK, BV = np.split(in_proj_bias, 3, axis=0)
+                    sub_l.set_weights([WQ,BQ,WK,BK,WV,BV]+self_weights[2:])
+                elif 'mutual_att' in sub_l.name:
+                    # split attn.in_proj.weight & bias
+                    in_proj_weight = mutual_weights[0]   # [d,3d]
+                    in_proj_bias = mutual_weights[1]   # [3d]
+                    WQ, WK, WV = np.split(in_proj_weight, 3, axis=1)
+                    BQ, BK, BV = np.split(in_proj_bias, 3, axis=0)
+                    sub_l.set_weights([WQ,BQ,WK,BK,WV,BV]+mutual_weights[2:])
                 elif 'dense' in sub_l.name:    # weight & bias
                     sub_l.set_weights(ffn_weights[0:2])
                     if ffn_weights:
@@ -221,7 +242,7 @@ for layer in keras_model.layers:
         torch_weights = [np.transpose(v, (1,0)) if 'weight' in k else v for k,v in layer_weights.items()]
         layer.set_weights(torch_weights)
 
-keras_model.save_weights('detr-r50-dc5.h5')
+keras_model.save_weights('detr-r50.h5')
 
 
 

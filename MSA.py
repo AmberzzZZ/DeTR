@@ -15,13 +15,15 @@ def gelu(x, approx=False):
 
 # MSA layer
 class MultiHeadAttention(Model):
-    def __init__(self, model_size, num_heads, attn_drop=0., ffn_drop=0., **kwargs):
+    def __init__(self, model_size, num_heads, attn_drop=0.1, ffn_drop=0.1, **kwargs):
         super(MultiHeadAttention, self).__init__(**kwargs)
 
         self.model_size = model_size
         self.num_heads = num_heads
         self.head_size = model_size // num_heads
-        self.WQKV = Dense(3*model_size)
+        self.WQ = Dense(model_size, name='dense_q')   # [b,Nq,d]
+        self.WK = Dense(model_size, name='dense_k')   # [b,Nk,d]
+        self.WV = Dense(model_size, name='dense_v')   # [b,Nv,d], Nk=Nv
         self.dense = Dense(model_size)
         self.msa_drop = Dropout(attn_drop)
         self.mlp_drop = Dropout(ffn_drop)
@@ -30,16 +32,17 @@ class MultiHeadAttention(Model):
         # query: (batch, maxlen, model_size)
         # key  : (batch, maxlen, model_size)
         # value: (batch, maxlen, model_size)
-        batch_size = tf.shape(inputs[0])[0]
 
-        # shape: (batch, maxlen, model_size)
-        qkv = self.WQKV(tf.concat(inputs, axis=1))
-        splits = [K.int_shape(i)[1] for i in inputs]
-        query, key, value = tf.split(qkv, splits, axis=1)
+        query, key, value = inputs
+        batch_size = tf.shape(query)[0]
+
+        # in_proj: shape: (batch, maxlen, model_size)
+        query = self.WQ(query)
+        key = self.WK(key)
+        value = self.WV(value)
 
         def _split_heads(x):
-            seq_len = x.shape[1]
-            x = tf.reshape(x, shape=[batch_size, seq_len, self.num_heads, self.head_size])
+            x = tf.reshape(x, shape=[batch_size, x.shape[1], self.num_heads, self.head_size])
             return tf.transpose(x, perm=[0, 2, 1, 3])
 
         # shape: (batch, num_heads, maxlen, head_size)
@@ -59,13 +62,12 @@ class MultiHeadAttention(Model):
             score += (1 - mask) * -1e9     # add mask=0 points with -inf, results in 0 in softmax
 
         # softmax & dropout
-        alpha = tf.nn.softmax(score)
+        alpha = tf.nn.softmax(score)    # [b,Nq,Nk]
         alpha = self.msa_drop(alpha)
 
         context = tf.matmul(alpha, value)
         context = tf.transpose(context, perm=[0, 2, 1, 3])
-        query_len = context.shape[1]
-        context = tf.reshape(context, (batch_size, query_len, self.model_size))
+        context = tf.reshape(context, (batch_size, query.shape[2], self.model_size))
         output = self.dense(context)
         output = self.mlp_drop(output)
 
@@ -76,17 +78,17 @@ class MultiHeadAttention(Model):
         return (B,N,self.model_size)
 
 
-# FFN layer
+# FFN layer: dense-relu-drop-dense-drop
 class FeedForwardNetwork(Model):
-    def __init__(self, dff_size, model_size, activation=relu, drop_rate=0.):
+    def __init__(self, emb_dim=256, hidden_dim=2048, activation=relu, drop_rate=0.1):
         super(FeedForwardNetwork, self).__init__()
-        self.dense1 = Dense(dff_size, activation=activation)   # relu/gelu
-        self.dense2 = Dense(model_size)
+        self.dense1 = Dense(hidden_dim, activation=activation)   # relu/gelu
+        self.dense2 = Dense(emb_dim)
         if drop_rate:
             self.drop1 = Dropout(drop_rate)
             self.drop2 = Dropout(drop_rate)
         self.act = Activation(activation)
-        self.model_size = model_size
+        self.emb_dim = emb_dim
         self.drop_rate = drop_rate
 
     def call(self, x):
@@ -101,28 +103,21 @@ class FeedForwardNetwork(Model):
 
     def compute_output_shape(self, input_shape):
         B, N, _ = input_shape
-        return (B,N,self.model_size)
+        return (B,N,self.emb_dim)
 
 
 if __name__ == '__main__':
 
     # test MSA & FFN layer
-    x = Input((20, 10))   # query, [N1,D]
-    x1 = Input((30, 10))  # key, [N2,D]
-    mask = Input((20,30))  # [N_q, N_k]
-    y = MultiHeadAttention(10, 2)(inputs=[x,x1,x1], mask=mask)
-    print('joint', y)
-    y = MultiHeadAttention(10, 2)(inputs=[y,y,y], mask=None)
-    print('self', y)
+    q = Input((20,10))  #  [b,N1,d]
+    k = Input((40,10))   # [b,N2,d]
+    mask = Input((20,40))     # [Nq,Nk]
+    y = MultiHeadAttention(10, 2)(inputs=[q,k,k], mask=mask)
+    y = MultiHeadAttention(10, 2)(inputs=[y,k,k], mask=mask)
     y = FeedForwardNetwork(16, 10)(y)
 
-    model = Model([x,x1,mask],y)
+    model = Model([q,k,mask],y)
     # model.summary()
 
-    layer = MultiHeadAttention(10, 2)
-    y = layer([y,y,y])
-    print(layer.weights)
-    for l in layer.layers:
-        print(l.name)
-        print(l.weights)
+    print(model.weights)
 

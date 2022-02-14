@@ -1,5 +1,6 @@
 from keras.layers import Layer
 import keras.backend as K
+import tensorflow as tf
 
 
 class FrozenBatchNormalization(Layer):
@@ -44,10 +45,10 @@ class FrozenBatchNormalization(Layer):
         )
 
     def call(self, inputs, training=None):
-        # norm
-        outputs = (inputs - self.mean) / K.sqrt(self.variance + self.epsilon)
-        # rescale
-        outputs = self.gamma*outputs + self.beta
+        # x = gamma * (sqrt(x-mean) / (var+eps)) + beta
+        scale = self.gamma * tf.rsqrt((self.variance+self.epsilon))
+        bias = self.beta - self.mean * scale
+        outputs = inputs * scale + bias
         return outputs
 
     def compute_output_shape(self, input_shape):
