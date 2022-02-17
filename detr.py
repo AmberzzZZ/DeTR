@@ -1,6 +1,7 @@
 from resnet import resnet
 from MSA import MultiHeadAttention, FeedForwardNetwork
 from LayerNormalization import LayerNormalization
+from loss import detr_loss, detr_loss_output
 from keras.layers import Input, Conv2D, Embedding, Dropout, add, Reshape, Dense, Lambda, ReLU
 from keras.models import Model
 import tensorflow as tf
@@ -10,11 +11,12 @@ import math
 
 
 def detr(input_shape=(512,512,3), pe='sine', n_classes=80, depth=50, dilation=False,
-         emb_dim=256, enc_layers=6, dec_layers=6, max_boxes=100,
-         mlp_dim=256):
+         emb_dim=256, enc_layers=6, dec_layers=6, max_boxes=100, max_target_boxes=20,
+         mlp_dim=256, mode='test'):
 
     # inpt
-    inpt = Input(input_shape)
+    inpt = Input(input_shape)    # [b,h,w,c]
+    mask = Input((input_shape[0],input_shape[1],1))   # [b,h,w,1]
 
     # back
     r50 = resnet(input_shape, depth=depth, dilation=dilation)
@@ -22,6 +24,7 @@ def detr(input_shape=(512,512,3), pe='sine', n_classes=80, depth=50, dilation=Fa
     stride = 32 // (2**int(dilation))
     feature_shape = (math.ceil(input_shape[0]/stride), math.ceil(input_shape[1]/stride))
     print('feature shape', feature_shape)
+    feat_mask = Lambda(lambda x: tf.image.resize(x, size=feature_shape))(mask)   # interpolate
 
     # reflect & pe
     x = Conv2D(emb_dim, 1, strides=1, padding='same', name='input_proj')(feat)   # [b,h,w,d]
@@ -31,11 +34,13 @@ def detr(input_shape=(512,512,3), pe='sine', n_classes=80, depth=50, dilation=Fa
         feat_pe = Lambda(lambda x: PositionalEmbeddingSine(emb_dim, feature_shape), name='PESine')(x)
     elif pe=='learned':   # trainable weights
         feat_pe = PositionalEmbeddingLearned(emb_dim, feature_shape, name='PELearned')(x)
-    feat_pe = Reshape((feature_shape[0]*feature_shape[1], emb_dim))(feat_pe)
+    feat_pe = Reshape((feature_shape[0]*feature_shape[1], emb_dim))(feat_pe)    # [1,hw,d]
+    feat_mask = Reshape((feature_shape[0]*feature_shape[1],))(feat_mask)        # [b,hw]
+    print('transformer feat', feat_pe, feat_mask)
 
     # transformer encoder: parse inputs
     for i in range(enc_layers):
-        x = TransformerEncoderBlock(drop_rate=0.1)([x, feat_pe])      # [b,hw,d]
+        x = TransformerEncoderBlock(drop_rate=0.1)([x, feat_pe], mask=feat_mask)      # [b,hw,d]
     encoder_feats = x
 
     # transformer decoder: feed targets x is a zeros-variable initially, get updated through the decoder blocks
@@ -43,17 +48,22 @@ def detr(input_shape=(512,512,3), pe='sine', n_classes=80, depth=50, dilation=Fa
     print('decoder pe', target_pe)
 
     for i in range(dec_layers):
-        x = TransformerDecoderBlock(drop_rate=0.1)([x, target_pe, encoder_feats, feat_pe])
+        x = TransformerDecoderBlock(drop_rate=0.1)([x, target_pe, encoder_feats, feat_pe], key_mask=feat_mask)
     x = LayerNormalization()(x)    # norm no matter pre_norm/post_norm
 
     # head: mlp
-    cls_output = Dense(n_classes, name='cls_pred', activation='softmax')(x)
+    cls_output = Dense(n_classes, name='cls_pred', activation='softmax')(x)  # [b,N2,cls]
     box = Dense(mlp_dim, activation='relu', name='box_hidden_1')(x)
     box = Dense(mlp_dim, activation='relu', name='box_hidden_2')(box)
-    box_output = Dense(4, activation='sigmoid', name='box_pred')(box)
+    box_output = Dense(4, activation='sigmoid', name='box_pred')(box)    # [b,N2,4]
 
-    # model
-    model = Model(inpt, [cls_output,box_output])
+    if mode=='test':
+        model = Model([inpt,mask], [cls_output,box_output])
+    else:
+        gt = Input((max_target_boxes,n_classes+4))    # [b,N2,4], fg + bg
+        loss = Lambda(detr_loss, arguments={'n_classes': n_classes})(
+                      [cls_output,box_output,gt])
+        model = Model([inpt,mask,gt], loss)
 
     return model
 
@@ -99,13 +109,13 @@ class TransformerEncoderBlock(Model):
 
         self.norm_before = norm_before
 
-    def call(self, inputs):
+    def call(self, inputs, mask=None):
         if self.norm_before:
-            return self.pre_norm(inputs)
+            return self.pre_norm(inputs, mask)
         else:
-            return self.post_norm(inputs)
+            return self.post_norm(inputs, mask)
 
-    def pre_norm(self, inputs):
+    def pre_norm(self, inputs, mask=None):
         x, pe = inputs
 
         # id path
@@ -115,7 +125,7 @@ class TransformerEncoderBlock(Model):
         x = self.ln1(x)
         q = k = x + pe
         v = x
-        x = self.msa([q,k,v])
+        x = self.msa([q,k,v], mask=mask)
         x = self.drop1(x)
 
         # add
@@ -134,7 +144,7 @@ class TransformerEncoderBlock(Model):
 
         return x
 
-    def post_norm(self, inputs):
+    def post_norm(self, inputs, mask=None):
         x, pe = inputs
 
         # id path
@@ -143,7 +153,7 @@ class TransformerEncoderBlock(Model):
         # residual path
         q = k = x + pe
         v = x
-        x = self.msa([q,k,v])
+        x = self.msa([q,k,v], mask=mask)
         x = self.drop1(x)
 
         # add
@@ -188,15 +198,15 @@ class TransformerDecoderBlock(Model):
 
         self.norm_before = norm_before
 
-    def call(self, inputs):
+    def call(self, inputs, mask=None, key_mask=None):
         # targets: decoder input
         # inputs: encoder output
         if self.norm_before:
-            return self.pre_norm(inputs)
+            return self.pre_norm(inputs, key_mask=key_mask)
         else:
-            return self.post_norm(inputs)
+            return self.post_norm(inputs, key_mask=key_mask)
 
-    def pre_norm(self, inputs):
+    def pre_norm(self, inputs, key_mask=None):
         x, target_pe, inputs, feat_pe = inputs
 
         # id path
@@ -220,7 +230,7 @@ class TransformerDecoderBlock(Model):
         q = x + target_pe
         k = inputs + feat_pe
         v = inputs
-        x = self.msa2([q,k,v])
+        x = self.msa2([q,k,v], key_mask=key_mask)
         x = self.drop2(x)
 
         # add
@@ -239,7 +249,7 @@ class TransformerDecoderBlock(Model):
 
         return x
 
-    def post_norm(self, inputs):
+    def post_norm(self, inputs, key_mask=None):
         x, target_pe, inputs, feat_pe = inputs
 
         # id path
@@ -262,7 +272,7 @@ class TransformerDecoderBlock(Model):
         q = x + target_pe
         k = inputs + feat_pe
         v = inputs
-        x = self.msa2([q,k,v])
+        x = self.msa2([q,k,v], key_mask=key_mask)
         x = self.drop2(x)
 
         # add
@@ -353,13 +363,14 @@ if __name__ == '__main__':
     print(pe_layer.weights)  # The first call will create the weights
 
     model = detr(input_shape=(512,512,3), pe='sine', n_classes=92, depth=50, dilation=False,
-                 emb_dim=256, enc_layers=6, dec_layers=6, max_boxes=100)
-    # model.summary()
-    # model.load_weights("weights/detr-r50.h5")
+                 emb_dim=256, enc_layers=6, dec_layers=6, max_boxes=100,
+                 mode='train')
+    model.summary()
+    model.load_weights("weights/detr-r50.h5")
 
-    for l in model.layers:
-        if 'decoderblock_1' in l.name:
-            print(l.weights)
+    # for l in model.layers:
+    #     if 'decoderblock_1' in l.name:
+    #         print(l.weights)
 
 
 

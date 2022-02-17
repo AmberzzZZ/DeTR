@@ -28,7 +28,7 @@ class MultiHeadAttention(Model):
         self.msa_drop = Dropout(attn_drop)
         self.mlp_drop = Dropout(ffn_drop)
 
-    def call(self, inputs, mask=None):
+    def call(self, inputs, mask=None, key_mask=None):
         # query: (batch, maxlen, model_size)
         # key  : (batch, maxlen, model_size)
         # value: (batch, maxlen, model_size)
@@ -54,12 +54,20 @@ class MultiHeadAttention(Model):
         matmul_qk = tf.matmul(query, key, transpose_b=True)
         # 缩放 matmul_qk
         dk = tf.cast(query.shape[-1], tf.float32)
-        score = matmul_qk / tf.math.sqrt(dk)
+        score = matmul_qk / tf.math.sqrt(dk)      # [b,h,N1,N2]
 
-        if isinstance(mask, list):
-            mask = mask[0]
         if mask is not None:
-            score += (1 - mask) * -1e9     # add mask=0 points with -inf, results in 0 in softmax
+            # print('mask', mask, score)
+            mask = K.expand_dims(mask, axis=1)
+            mask = K.expand_dims(mask, axis=3)
+            mask = tf.tile(mask, [1,self.num_heads,1,int(key.shape[2])])
+            score += mask * -1e9     # add mask=0 points with -inf, results in 0 in softmax
+        if key_mask is not None:
+            # print('key_mask', key_mask, score)
+            key_mask = K.expand_dims(key_mask, axis=1)
+            key_mask = K.expand_dims(key_mask, axis=2)
+            key_mask = tf.tile(key_mask, [1,self.num_heads,int(query.shape[2]),1])
+            score += key_mask * -1e9
 
         # softmax & dropout
         alpha = tf.nn.softmax(score)    # [b,Nq,Nk]

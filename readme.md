@@ -63,6 +63,12 @@
     * 两种参数都会通过model.state_dict()被保存为OrderedDict
 
 
+    ----- train one epoch -----
+    scipy.optimize.linear_sum_assignment: 
+    ref1: https://stackoverflow.com/questions/62238064/how-to-use-scipy-optimize-linear-sum-assignment-in-tensorflow-or-keras
+    ref2: https://github.com/google/gumbel_sinkhorn/blob/master/sinkhorn_ops.py
+    ref3: https://github.com/Visual-Behavior/detr-tensorflow/blob/main/detr_tf/loss/hungarian_matching.py
+
 
 
 
