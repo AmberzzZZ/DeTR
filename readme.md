@@ -79,6 +79,10 @@
     0. 用一两张去预实验，首先验证了网络能够正确收敛到target上，然后用大数据集去训练：
     1. 不稳定，loss忽高忽低
     2. 收敛慢
+    3. official github issues
+        3.1 单卡/两卡bs=4/8去做：the total batch-size is probably too small for reliable convergence, You may try to either increase the batch-size or decrease the learning rate
+        3.2 2k左右custom dataset不收敛：官方说太小，有个2k set 4类的老哥收敛了
+        3.3 总之issue区基本无人生还
 
 
 ## deformable DETR
