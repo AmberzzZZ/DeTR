@@ -1,9 +1,10 @@
 import tensorflow as tf
 import keras.backend as K
 from scipy.optimize import linear_sum_assignment
+import numpy as np
 
 
-def detr_loss(args, n_classes, cost_cls=1, cost_bbox=5, cost_giou=2):
+def detr_loss(args, n_classes, cost_cls=1, cost_bbox=5, cost_giou=2, max_boxes=100):
 
     cls_preds, box_preds, targets = args
 
@@ -22,7 +23,7 @@ def detr_loss(args, n_classes, cost_cls=1, cost_bbox=5, cost_giou=2):
     giou_loss = tf.TensorArray(tf.float32, size=1, dynamic_size=True)
 
     def loop_body(b, n_fg, cls_loss, l1_loss, giou_loss):
-        pred_prob = cls_preds[b]
+        pred_prob = cls_preds[b]    # [N1,cls]
         pred_bbox = box_preds[b]    # [N1,4]
 
         target_cls = targets[b][:, :n_classes]
@@ -59,10 +60,14 @@ def detr_loss(args, n_classes, cost_cls=1, cost_bbox=5, cost_giou=2):
         # gap = 5 - tf.shape(matched_targets)[0]
         # matched_targets = tf.pad(matched_targets, [[0,gap],[0,0]])
 
-        # cls_loss: ce
-        sample_cls_loss = loss_cls(matched_targets[:,:n_classes], matched_pred_prob)
+        # cls_loss: ce on all predictions
+        neg_vec = np.zeros((max_boxes,n_classes), dtype='float32')  # [N1,cls]
+        neg_vec[:,-1] = 1.
+        neg_vec = tf.Variable(neg_vec)
+        target_cls_full = tf.scatter_nd_update(neg_vec, id1, matched_targets[:,:n_classes])   # [N1,cls]
+        sample_cls_loss = loss_cls(target_cls_full, pred_prob, n_classes)
 
-        # bbox_loss: l1 + giou
+        # bbox_loss: l1 + giou, on gt positives
         sample_l1_loss = loss_l1(matched_targets[:,-4:], matched_pred_bbox)
         id12 = tf.concat([id1,id2],axis=1)   # [N2,2]
         matched_giou = tf.gather_nd(giou_cost, id12)   # [N2,], -giou, [-1,1]
@@ -83,7 +88,7 @@ def detr_loss(args, n_classes, cost_cls=1, cost_bbox=5, cost_giou=2):
 
     # merge loss
     total_n_fg = K.sum(n_fg.stack())   # [b,] each ele=sum_fg
-    total_cls_loss = cls_loss.stack() / total_n_fg
+    total_cls_loss = cls_loss.stack()
     total_l1_loss = l1_loss.stack() / total_n_fg
     total_giou_loss = giou_loss.stack() / total_n_fg
 
@@ -112,14 +117,18 @@ def tf_linear_sum_assignment(cost_mat):
     return tf.py_func(linear_sum_assignment, [cost_mat], [tf.int64, tf.int64])
 
 
-def loss_cls(y_true, y_pred):
+def loss_cls(y_true, y_pred, n_classes):
     # total ce on matched fg boxes per sample
-    # y_true: [N,cls]
+    # y_true: [N,cls], fg+bg
     # y_pred: [N,cls]
-    pt = K.abs(y_true - y_pred)
-    pt = K.clip(pt, K.epsilon(), 1-K.epsilon())
-    ce = -K.log(1-pt)
-    return K.sum(K.mean(ce, axis=-1))   # scalar
+
+    ce_loss = K.categorical_crossentropy(y_true, y_pred)  # [N,]
+
+    # reweight: encourage the fg cases
+    weights = 10*K.sum(y_pred[:-1]) + K.sum(y_pred[-1])  # [N,] 10 for fg, 1 for bg
+    ce_loss = ce_loss * weights
+
+    return K.mean(ce_loss)   # scalar
 
 
 def loss_l1(y_true, y_pred):
@@ -127,7 +136,7 @@ def loss_l1(y_true, y_pred):
     # y_true: [N,4]
     # y_pred: [N,4]
     l1 = K.abs(y_true-y_pred)
-    return K.sum(K.mean(l1, axis=-1))   # scalar
+    return K.sum(K.sum(l1, axis=-1))   # scalar
 
 
 def cdist(tensor1, tensor2, mode='L1'):
@@ -187,7 +196,7 @@ if __name__ == '__main__':
     tgt = Input((3, 2+4))
 
     # loss = detr_loss(pred, tgt, n_classes=2, cost_cls=1, cost_bbox=5, cost_giou=2)
-    loss = Lambda(detr_loss, arguments={'n_classes': 2}, output_shape=detr_loss_output)([pred_cls,pred_bbox,tgt])
+    loss = Lambda(detr_loss, arguments={'n_classes': 2, 'max_boxes':3}, output_shape=detr_loss_output)([pred_cls,pred_bbox,tgt])
     print('loss', loss)
     model = Model([pred_cls,pred_bbox,tgt], loss)
 

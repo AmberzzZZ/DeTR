@@ -70,11 +70,15 @@
     ref3: https://github.com/Visual-Behavior/detr-tensorflow/blob/main/detr_tf/loss/hungarian_matching.py
 
 
+    tf.scatter_nd_update:
+    这个方法有个替身tf.tensor_scatter_nd，
+    刚开始用scatter_nd_update一直报错，发现是ref和updates必须都是tf.Variable，不能是tf.Constant
 
 
-
-
-
+    ----- 训练心得 -----
+    0. 用一两张去预实验，首先验证了网络能够正确收敛到target上，然后用大数据集去训练：
+    1. 不稳定，loss忽高忽低
+    2. 收敛慢
 
 
 ## deformable DETR
