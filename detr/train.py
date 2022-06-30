@@ -8,8 +8,8 @@ from keras.optimizers import Adam
 if __name__ == '__main__':
 
     # data
-    img_dir = "coco/train/"
-    anno_dir = "coco/txt/"
+    img_dir = "../coco/train/"
+    anno_dir = "../coco/txt/"
     input_shape = (800,1200)
     n_classes = 90
     batch_size = 2

@@ -37,7 +37,7 @@ def resnet(input_shape=(224,224,3), depth=50, dilation=False):
             feats.append(x)
 
     # model
-    model = Model(inpt, feats, name='backbone')
+    model = Model(inpt, x, name='backbone')
 
     return model
 

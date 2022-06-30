@@ -24,7 +24,7 @@ def detr(input_shape=(512,512,3), pe='sine', n_classes=80, depth=50, dilation=Fa
     stride = 32 // (2**int(dilation))
     feature_shape = (math.ceil(input_shape[0]/stride), math.ceil(input_shape[1]/stride))
     print('feature shape', feature_shape)
-    feat_mask = Lambda(lambda x: tf.image.resize(x, size=feature_shape))(mask)   # interpolate
+    feat_mask = Lambda(tf.image.resize_nearest_neighbor, arguments={'size':feature_shape})(mask)   # interpolate
 
     # reflect & pe
     x = Conv2D(emb_dim, 1, strides=1, padding='same', name='input_proj')(feat)   # [b,h,w,d]
@@ -362,7 +362,7 @@ if __name__ == '__main__':
     y = pe_layer(x)
     print(pe_layer.weights)  # The first call will create the weights
 
-    model = detr(input_shape=(512,512,3), pe='sine', n_classes=92, depth=50, dilation=False,
+    model = detr(input_shape=(512,512,3), pe='learned', n_classes=92, depth=50, dilation=False,
                  emb_dim=256, enc_layers=6, dec_layers=6, max_boxes=100,
                  mode='train')
     model.summary()

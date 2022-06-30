@@ -14,7 +14,7 @@
     * mask: 有图像的地方是0，没图像的地方是1
     * batch_shape: 是这个batch内图片的最大尺寸
 
-    pretrained: 
+    pretrained:
     * detr-r50.pth
     * detr-r50-dc5.pth
 
@@ -50,7 +50,7 @@
     separated learning rate: backbone 1e-5, transformer 1e-4
     weight decay = 1e-4
     init: backbone - ImageNet-pretrained with frozen BN, transformer - Xavier
-    augmentation: scale, shortest in [480,800], longest side < 1333, random crop, prob=0.5 
+    augmentation: scale, shortest in [480,800], longest side < 1333, random crop, prob=0.5
     transformer dropout: 0.1
     300 epochs, lr decay by 10 after 200 epochs
     loss: linear combine l1 & giou
@@ -64,7 +64,7 @@
 
 
     ----- train one epoch -----
-    scipy.optimize.linear_sum_assignment: 
+    scipy.optimize.linear_sum_assignment:
     ref1: https://stackoverflow.com/questions/62238064/how-to-use-scipy-optimize-linear-sum-assignment-in-tensorflow-or-keras
     ref2: https://github.com/google/gumbel_sinkhorn/blob/master/sinkhorn_ops.py
     ref3: https://github.com/Visual-Behavior/detr-tensorflow/blob/main/detr_tf/loss/hungarian_matching.py
@@ -89,6 +89,50 @@
 
     paper: DEFORMABLE DETR: DEFORMABLE TRANSFORMERS FOR END-TO-END OBJECT DETECTION, 2021, SenseTime
     official: https:// github.com/fundamentalvision/Deformable-DETR
+    整体的代码结构与上面的DETR保持一致
+
+    集齐三大神器：
+    multi-scale
+    deformable
+    attention
+
+
+    ----- backbone ------
+    还是基于resnet，r50/101，with/o dc5
+    返回值不同：
+        - 返回多个尺度的特征图，stage2/3/4的输出, return_layers = {"layer2": "0", "layer3": "1", "layer4": "2"}，x8/x16/x32
+        - 返回对应特征尺度的mask
+        - 返回对应level的PE：sine/learned
+    channel align: conv+GroupNorm, list of [b,Li,C] (feat & mask), 代码里的input_flatten, 论文公式里的x
+
+    ----- transformer ------
+    encoder: self-attn(MSDeformAttn)
+    decoder: self-attn(MSA), cross-attn(MSDeformAttn)
+
+
+    ----- transformer encoder ------
+    初始的input feature是aligned features，来自backbone
+    中间层的输入则是前一层的输出，维度始终是[b,Sum_Li,C]，Q=feat+PE，V=feat，没有K，因为K是在MSDeform内部通过dense层生成出来的稀疏offsets
+    spatial_shapes & valid_ratios & reference_points: feature grid centers
+    level embedding: encoder的feature是cross-level的stack，为每个level添加了一个trainable embedding来区分
+
+
+    ----- transformer decoder ------
+    query_embed: one/two_stage不一样，one_stage是embedding生成的learnable vectors
+
+
+    ----- head ------
+    头部就是fc/MLP，和DeTR保持一致
+
+
+
+
+
+
+
+
+
+
 
 
 
