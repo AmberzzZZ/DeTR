@@ -1,7 +1,7 @@
 import torch
-from detr import detr
 from resnet import resnet
 import numpy as np
+
 
 model = torch.load("weights/detr-r50.pth", map_location='cpu')['model']   # OrderedDict
 print(len(model.keys()))

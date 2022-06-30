@@ -18,6 +18,7 @@ def resnet(input_shape=(224,224,3), depth=50, dilation=False):
 
     # blocks
     num_blocks = n_blocks[depth]
+    feats = []
     for i in range(len(num_blocks)):
         dilate = dilation if i==3 else False
         for j in range(num_blocks[i]):
@@ -32,9 +33,11 @@ def resnet(input_shape=(224,224,3), depth=50, dilation=False):
             else:
                 # dilation added for all-but-first blocks
                 x = res_block(x, n_filters[i], strides=1, dilation=dilate_rate, name='stage%d.block%d'%(i+1,j))
+        if i:
+            feats.append(x)
 
     # model
-    model = Model(inpt, x, name='backbone')
+    model = Model(inpt, feats, name='backbone')
 
     return model
 
